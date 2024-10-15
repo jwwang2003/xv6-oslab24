@@ -135,7 +135,7 @@ void syscall(void) {
     int arg0 = p->trapframe->a0;
 
     p->trapframe->a0 = syscalls[num]();
-    if ((p->trace >> (num)) & 0x01) {
+    if ((1 << num) & p->trace) {
       printf("%d: %s(%d) -> %d\n", p->pid, sys_name[num-1], arg0, p->trapframe->a0);
     }
   } else {
