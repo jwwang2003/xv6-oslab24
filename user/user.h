@@ -25,6 +25,8 @@ int sleep(int);
 int uptime(void);
 int rename(const char*);
 
+int trace(int);
+
 // ulib.c
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);
