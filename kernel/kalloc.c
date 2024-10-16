@@ -68,3 +68,22 @@ void *kalloc(void) {
   if (r) memset((char *)r, 5, PGSIZE);  // fill with junk
   return (void *)r;
 }
+
+// Refering to the kalloc function, we implement our nfree() function
+// nfree() returns the number of bytes that is free
+
+uint64 nfree(void) {
+  struct run* r;
+  int bytes = 0;
+
+  acquire(&kmem.lock);
+  r = kmem.freelist;
+
+  while (r) {
+    r = r->next;
+    bytes++;
+  }
+
+  release(&kmem.lock);
+  return bytes * PGSIZE;
+}
