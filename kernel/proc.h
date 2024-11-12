@@ -103,4 +103,8 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+   // + k_pagetable, kstack_pa
+  pagetable_t k_pagetable;
+  uint64 kstack_pa;
 };

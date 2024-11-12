@@ -330,7 +330,7 @@ int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
     dst += n;
     srcva = va0 + PGSIZE;
   }
-  return 0;
+  return 0; 
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -378,4 +378,123 @@ int test_pagetable() {
   uint64 gsatp = MAKE_SATP(kernel_pagetable);
   printf("test_pagetable: %d\n", satp != gsatp);
   return satp != gsatp;
+}
+
+void print_pgtbl(pagetable_t pgtbl, int depth, long virt) {
+  virt <<= 9;  // + 拿到上一层的虚拟地址，需要先左移9位，方便加上下一级页表号
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pgtbl[i];       // 获取每一条pte
+    if (pte & PTE_V) {          // 如果pte有效
+      uint64 pa = PTE2PA(pte);  // 求出pa
+      char prefix[16] = "||";
+      int str_end = 2;
+      for (int j = depth; j > 0; j--) {
+        prefix[str_end] = ' ';
+        prefix[str_end + 1] = '|';
+        prefix[str_end + 2] = '|';
+        str_end += 3;
+      }
+      printf(prefix);
+      if (depth == 2) {
+        // + 虚拟地址加上最后一级页表号，之后再左挪12位
+        printf("idx: %d: va: %p -> pa: %p, flags: ", i, ((virt + i) << 12), pa);
+      } else {
+        printf("idx: %d: pa: %p, flags: ", i, pa);
+      }
+
+      // + 增加BIT_MACRO和symbol数组用于打印flags
+      long BIT_MACRO[4] = {PTE_R, PTE_W, PTE_X, PTE_U};
+      char symbol[][4] = {"r", "w", "x", "u"};
+      for (int i = 0; i < 4; i++) {
+        if ((pte & BIT_MACRO[i]) != 0) {
+          printf("%s", symbol[i]);
+        } else {
+          printf("-");
+        }
+      }
+      printf("\n");
+      if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+        print_pgtbl((pagetable_t)pa, depth + 1, virt + i);
+      }
+    }
+  }
+}
+
+// + vmprint definition
+void vmprint(pagetable_t pgtbl) {
+  printf("page table %p\n", pgtbl);
+  // 递归打印pte和pa
+  print_pgtbl(pgtbl, 0, 0L);
+}
+
+// + kvminit_for_each_process definition
+pagetable_t kvminit_for_each_process() {
+  pagetable_t k_pagetable = (pagetable_t)kalloc();
+  memset(k_pagetable, 0, PGSIZE);
+  // uart registers
+  kvmmap_for_each_process(k_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  // virtio mmio disk interface
+  kvmmap_for_each_process(k_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  // 不映射CLINT
+  // PLIC
+  kvmmap_for_each_process(k_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  // map kernel text executable and read-only.
+  kvmmap_for_each_process(k_pagetable, KERNBASE, KERNBASE, (uint64)etext - KERNBASE, PTE_R | PTE_X);
+  // map kernel data and the physical RAM we'll make use of.
+  kvmmap_for_each_process(k_pagetable, (uint64)etext, (uint64)etext, PHYSTOP - (uint64)etext, PTE_R | PTE_W);
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  kvmmap_for_each_process(k_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return k_pagetable;
+}
+
+// + kvmmap_for_each_process definition
+void kvmmap_for_each_process(pagetable_t k_pagetable, uint64 va, uint64 pa, uint64 sz, int perm) {
+  if (mappages(k_pagetable, va, sz, pa, perm) != 0) {
+    panic("kvmmap");
+  }
+}
+
+// + kvminithart_for_each_process definition
+void kvminithart_for_each_process(pagetable_t k_pagetable) {
+  w_satp(MAKE_SATP(k_pagetable));
+  sfence_vma();
+}
+
+void free_pagetable_except_for_leaf(pagetable_t pagetable) {
+  for (int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if ((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+      uint64 pa = PTE2PA(pte);
+      free_pagetable_except_for_leaf((pagetable_t)pa);
+      pagetable[i] = 0;
+    }
+    pagetable[i] = 0;
+  }
+  kfree((void*)pagetable);
+}
+
+int sync_pagetable(pagetable_t old, pagetable_t new, uint64 sz, uint64 sz_n) {
+  pte_t* pte;
+  uint64 pa, i;
+  uint flags;
+  sz = PGROUNDUP(sz);
+  for (i = sz; i < sz_n; i += PGSIZE) {
+    if ((pte = walk(old, i, 0)) == 0) {
+      panic("sync_pagetable:pte should exist");
+    }
+    if ((*pte & PTE_V) == 0) {
+        panic("sync_pagetable:page not present");
+    }
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte) & (~PTE_U);
+    if (mappages(new, i, PGSIZE, (uint64)pa, flags) != 0) {
+      goto err;
+    }
+  }
+  return 0;
+
+err:
+  uvmunmap(new, 0, i / PGSIZE, 0);
+  return -1;
 }

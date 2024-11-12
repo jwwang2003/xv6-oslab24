@@ -177,8 +177,23 @@ void            uvmclear(pagetable_t, uint64);
 uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
+//
+int             copyin_new(pagetable_t, char*, uint64, uint64);
+int             copyinstr_new(pagetable_t, char*, uint64, uint64);
+//
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 int             test_pagetable();
+// + vmprint declaration
+void            vmprint(pagetable_t);
+// + kvminit_for_each_process, kvmmap_for_each_process declaration
+pagetable_t     kvminit_for_each_process(void);
+void            kvmmap_for_each_process(pagetable_t, uint64, uint64, uint64, int);
+void            kvminithart_for_each_process(pagetable_t);
+// + free_pagetable_except_for_leaf declaration
+void            free_pagetable_except_for_leaf(pagetable_t);
+int             sync_pagetable(pagetable_t, pagetable_t, uint64, uint64);
+// + uvmdealloc_u_in_k declaration
+uint64          uvmdealloc_u_in_k(pagetable_t, uint64, uint64);
 
 // plic.c
 void            plicinit(void);
