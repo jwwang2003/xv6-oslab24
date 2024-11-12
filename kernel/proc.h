@@ -117,5 +117,5 @@ struct proc {
 };
 
 // TODO: using RR for Round-Robin, using PR for Priority-Scheduling
-#define RR
-// #define PR
+// #define RR
+#define PR

@@ -114,13 +114,52 @@ uint64 sys_sysinfo(void) {
     return 0;
 }
 
+// TODO
 // 统计进程调度信息的系统调用
 uint64 sys_wait_sched(void) {
-    
+  struct proc *np = myproc();
+  int runnable_time, running_time, sleep_time;
+  int pid;
+  
+  // 获取用户传入的地址
+  uint64 addr;
+  if (argaddr(0, &addr) < 0) {
+    return -1;
+  }
+
+  // 调用 wait_sched 获取子进程的调度信息
+  pid = wait_sched(&runnable_time, &running_time, &sleep_time);
+
+  // 如果没有子进程或进程被杀死，返回 -1
+  if (pid == -1) {
+    return -1;
+  }
+  
+  // 创建一个结构体，存储获取到的调度信息
+  struct sched_info info;
+  info.wait_time = runnable_time;
+  info.cpu_time = running_time;
+  info.sleep_time = sleep_time;
+  
+
+  // 将结构体复制到用户空间
+  if (copyout(np->pagetable, addr, (char *)&info, sizeof(uint64) * 3) < 0) {
+    return -1;
+  }
+
+  return pid;
+  //return 0;
 }
 
 
+// TODO
 // 设置进程优先级的系统调用
 uint64 sys_set_priority(void) {
-    
+    int priority;
+    int pid;
+
+    if (argint(0, &priority) < 0) return -1;
+    if (argint(1, &pid) < 0) return -1;
+
+    return set_priority(priority, pid);
 }

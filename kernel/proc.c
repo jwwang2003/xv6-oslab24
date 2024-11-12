@@ -97,14 +97,56 @@ static struct proc *allocproc(void) {
   }
   return 0;
 
+  // struct proc {
+  //   struct spinlock lock;
+
+  //   // p->lock must be held when using these:
+  //   enum procstate state;        // Process state
+  //   struct proc *parent;         // Parent process
+  //   void *chan;                  // If non-zero, sleeping on chan
+  //   int killed;                  // If non-zero, have been killed
+  //   int xstate;                  // Exit status to be returned to parent's wait
+  //   int pid;                     // Process ID
+
+  //   // these are private to the process, so p->lock need not be held.
+  //   uint64 kstack;               // Virtual address of kernel stack
+  //   uint64 sz;                   // Size of process memory (bytes)
+  //   pagetable_t pagetable;       // User page table
+  //   struct trapframe *trapframe; // data page for trampoline.S
+  //   struct context context;      // swtch() here to run process
+  //   struct file *ofile[NOFILE];  // Open files
+  //   struct inode *cwd;           // Current directory
+  //   char name[16];               // Process name (debugging)
+
+  //   // Newly added for Lab3
+  //   uint64 created_time;         // creation time
+  //   uint64 finish_time;          // finish time
+  //   uint64 running_time;         // running time
+  //   uint64 runable_time;         // runnable time
+  //   uint64 sleep_time;           // sleeping time
+  //   uint64 start;                // start time of a process state
+  //   uint64 end;                  // end time of a process state
+
+  //   int priority;                // Process priority, within [0,1,2,3], 0 is the highest and 3 is the lowest
+  // };
+
 found:
   p->pid = allocpid();
-  
-  // TODO: add A LOT OF init here
 
-  #ifdef PR
+  // Initialize priority (defualt is 2)
+  // p->priority = 2;
+
+#ifdef PR
   p->priority = 2;
-  #endif
+#endif
+  // Allocate a kernel stack
+  if ((p->kstack = (uint64)kalloc()) == 0) {
+    p->state = UNUSED;
+    return 0;
+  }
+
+  // Initialize the process memory size
+  p->sz = 0;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -125,6 +167,17 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  // Initialize timing fields for state tracking
+  p->created_time = ticks;
+  p->start = ticks;
+  p->running_time = 0;
+  p->runable_time = 0;
+  p->sleep_time = 0;
+  // leave p->end, that tracks when the process ends
+
+  // Directly set the process state to RUNNABLE, skipping EMBYRO
+  p->state = RUNNABLE;
 
   return p;
 }
@@ -210,6 +263,7 @@ void userinit(void) {
   p->cwd = namei("/");
 
   // TODO: on state change
+  on_state_change(p->state, RUNNABLE, p);
   p->state = RUNNABLE;
 
   release(&p->lock);
@@ -271,6 +325,7 @@ int fork(void) {
   pid = np->pid;
 
   // TODO: on state change
+  on_state_change(np->state, RUNNABLE, np);
   np->state = RUNNABLE;
 
   release(&np->lock);
@@ -356,7 +411,7 @@ void exit(int status) {
   wakeup1(original_parent);
 
   // TODO: on state change
-
+  on_state_change(p->state, ZOMBIE, p);
   p->xstate = status;
   p->state = ZOMBIE;
 
@@ -435,13 +490,14 @@ void scheduler(void) {
     intr_on();
 
     int found = 0;
-    
-    // Note here that we have two different scheduling algorithms
-    #if defined RR
+
+// Note here that we have two different scheduling algorithms
+#if defined RR
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
         // TODO: on state change
+        // EXAMPLE!!!
         on_state_change(p->state, RUNNING, p);
 
         // Switch to chosen process.  It is the process's job
@@ -459,15 +515,49 @@ void scheduler(void) {
       }
       release(&p->lock);
     }
-    #elif defined PR
+#elif defined PR
     // Priority scheduling, iterating over max_p to find process with highest priority
 
     // First find the process with the highest priority and is RUNNABLE
-    
-    
+
     // If found such max_p, copy to p, and run it.
-    
-    #endif
+    struct proc *max_p = 0;
+    int highest_priority = 4;  // Assuming priorities range from 0 (highest) to 3 (lowest)
+
+    // Find the RUNNABLE process with the highest priority
+    for (p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE) {
+        if (max_p == 0 || p->priority < highest_priority) {
+          // Update the max_p to the current process with higher priority
+          if (max_p) {
+            release(&max_p->lock);  // Release the previous max_p's lock
+          }
+          max_p = p;
+          highest_priority = p->priority;
+          found = 1;
+        } else {
+          release(&p->lock);  // Release lock for non-selected processes
+        }
+      } else {
+        release(&p->lock);  // Release lock for non-RUNNABLE processes
+      }
+    }
+
+    // If a suitable RUNNABLE process was found, run it
+    if (found && max_p) {
+      on_state_change(max_p->state, RUNNING, max_p);
+      max_p->state = RUNNING;
+      c->proc = max_p;
+      swtch(&c->context, &max_p->context);
+
+      // Process is done running for now.
+      // It should have changed its max_p->state before coming back.
+      c->proc = 0;
+
+      release(&max_p->lock);
+    }
+#endif
     // The same as Round-Robin, if no RUNNABLE process is found, we will wait for interrupt
     if (found == 0) {
       intr_on();
@@ -503,7 +593,7 @@ void yield(void) {
   acquire(&p->lock);
 
   // TODO: on state change
-  
+  on_state_change(p->state, RUNNABLE, p);
   p->state = RUNNABLE;
   sched();
   release(&p->lock);
@@ -545,7 +635,7 @@ void sleep(void *chan, struct spinlock *lk) {
   }
 
   // TODO: on state change
-
+  on_state_change(p->state, SLEEPING, p);
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
@@ -571,7 +661,7 @@ void wakeup(void *chan) {
     acquire(&p->lock);
     if (p->state == SLEEPING && p->chan == chan) {
       // TODO: on state change
-
+      on_state_change(p->state, RUNNABLE, p);
       p->state = RUNNABLE;
     }
     release(&p->lock);
@@ -599,7 +689,7 @@ int kill(int pid) {
       p->killed = 1;
       if (p->state == SLEEPING) {
         // TODO: on state change
-
+        on_state_change(p->state, RUNNABLE, p);
         // Wake process from sleep().
         p->state = RUNNABLE;
       }
@@ -660,29 +750,140 @@ void procdump(void) {
 
 // kernel/proc.c
 uint64 get_unused_procs(void) {
-    struct proc *p;
-    uint64 count = 0;
+  struct proc *p;
+  uint64 count = 0;
 
-    for (p = proc; p < &proc[NPROC]; p++) {
-        if (p->state == UNUSED) {
-            count++;
-        }
+  for (p = proc; p < &proc[NPROC]; p++) {
+    if (p->state == UNUSED) {
+      count++;
     }
-    return count;
+  }
+  return count;
 }
 
-// get the running time, sleeping time, runnable time when the child process returns 
-int wait_sched(int *runable_time, int *running_time, int *sleep_time) {
+// TODO
+// get the running time, sleeping time, runnable time when the child process returns
+/**
+ * INPUT: 获取进程处于RUNNABLE，RUNNING，SLEEPING等状态下的时间，单位为xv6内部触发中断的间隔数
+ * ticks，ticks是xv6触发时间中断自增的一个变量，可以相对反映出一个进程的运行时长
+ * OUPTUT: 状态码 -1 表示出错，成功则返回pid
+ * FUNCTION: 在完成wait的基本逻辑之外，额外返回父进程fork出来的子进程的运行状态，父进程在子
+ * 进程结束的时刻通过wait_sched可以获取到OS调度进程（调度的对象是我们fork出的子进程）的相关信息
+ */
+// int wait_sched(int *runable_time, int *running_time, int *sleep_time) { return 0; }
 
+int wait_sched(int *runable_time, int *running_time, int *sleep_time) {
+  struct proc *p;
+  int havekids, pid;
+
+  struct proc *proc = myproc();
+
+  acquire(&proc->lock);
+  for (;;) {
+    // Scan through the process table looking for children.
+    havekids = 0;
+    for (p = proc; p < &proc[NPROC]; p++) {
+      if (p->parent != myproc()) continue;
+      havekids = 1;
+      if (p->state == ZOMBIE) {
+        // Found a zombie child; retrieve timings
+        *runable_time = p->runable_time;
+        *running_time = p->running_time;
+        *sleep_time = p->sleep_time;
+
+        pid = p->pid;
+        kfree((void *)p->kstack);
+        p->kstack = 0;
+        freeproc(p);
+        release(&proc->lock);
+        return pid;
+      }
+    }
+
+    // No children in ZOMBIE state.
+    if (!havekids || myproc()->killed) {
+      release(&proc->lock);
+      return -1;
+    }
+
+    // Wait for a child to exit.
+    sleep(myproc(), &proc->lock);
+  }
 }
 
 // UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE
+/**
+ * PURPOSE: 实现 `on_state_change` 在进程状态发生变化时收集运行时长
+ * `on_stage_change` is called when the state of a process changes
+ * its main responsibility is collecting the running time
+ *
+ * proc *p : cur_state -> nxt_state
+ */
 int on_state_change(int cur_state, int nxt_state, struct proc *p) {
-    
+  // The time spent in calculated by substracting the
+  // current tick from when the process started
+  uint64 time_in_state = ticks - p->start;
+
+  // Update the appropriate state timer based on cur_stage
+  // This track the amount of time the process has spent
+  // in its respective state
+  switch (cur_state) {
+    case RUNNING:
+      p->running_time += time_in_state;
+      break;
+    case RUNNABLE:
+      p->runable_time += time_in_state;
+      break;
+    case SLEEPING:
+      p->sleep_time += time_in_state;
+      break;
+    case UNUSED:
+      // Do nothing?
+      break;
+    case ZOMBIE:
+      // Do nothing?
+      break;
+    default:
+      break;
+  }
+
+  // Update the processes state to the next state
+  // p->state = nxt_state; // Update the actual process state
+  // But in our case, we do not need to update the value here
+
+  // Update the start timer now for the new state to track
+  p->start = ticks;
+
+  if (nxt_state == ZOMBIE) {
+    p->finish_time = ticks;
+  }
+
+  // Optionally, we can also record the state change here in logs
+
+  // Return 0 upon successful execution
+  return 0;
 }
+
+extern uint ticks;  // Ensure that ticks is accessible
 
 // set priority [0-3] to a given process [pid]
 // -1 means error, 0 means success
 int set_priority(int priority, int pid) {
-    
+  struct proc *p;
+  if (priority > 10 || priority < 0) {
+    return -1;
+  }
+
+  struct proc *proc = myproc();
+
+  acquire(&proc->lock);
+  for (p = proc; p < &proc[NPROC]; p++) {
+    if (p->pid == pid && p->state != UNUSED) {
+      p->priority = priority;
+      release(&proc->lock);
+      return 0;
+    }
+  }
+  release(&proc->lock);
+  return -1;
 }

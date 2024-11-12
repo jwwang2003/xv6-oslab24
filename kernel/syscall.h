@@ -23,3 +23,5 @@
 #define SYS_rename 22
 #define SYS_trace 23
 #define SYS_sysinfo 24
+#define SYS_wait_sched 25
+#define SYS_set_priority 26
