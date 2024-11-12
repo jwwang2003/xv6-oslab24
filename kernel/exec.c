@@ -93,6 +93,10 @@ int exec(char *path, char **argv) {
   oldpagetable = p->pagetable;
   p->pagetable = pagetable;
 
+  //
+  uvmdealloc_u_in_k(p->k_pagetable, p->sz, 0);
+  sync_pagetable(p->pagetable, p->k_pagetable, 0, sz);
+
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp;          // initial stack pointer

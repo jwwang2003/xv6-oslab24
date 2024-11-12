@@ -205,6 +205,9 @@ void userinit(void) {
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+  // +
+  sync_pagetable(p->pagetable, p->k_pagetable, 0, p->sz);
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -228,8 +231,12 @@ int growproc(int n) {
     if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    // +
+    sync_pagetable(p->pagetable, p->k_pagetable, p->sz, p->sz + n);
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    // +
+    uvmdealloc_u_in_k(p->k_pagetable, p->sz, p->sz + n);
   }
   p->sz = sz;
   return 0;
@@ -273,6 +280,9 @@ int fork(void) {
   pid = np->pid;
 
   np->state = RUNNABLE;
+
+  // +
+  sync_pagetable(np->pagetable, np->k_pagetable, 0, np->sz);
 
   release(&np->lock);
 
