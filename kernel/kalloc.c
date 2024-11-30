@@ -21,12 +21,17 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU];
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  // initlock(&kmem.lock, "kmem");
+
+  //NEW EDIT
+  for (int i = 0; i < NCPU; ++i) {
+    initlock(&kmem[i].lock, "kmem");
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -56,10 +61,40 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  // NEW EDITS
+  push_off();
+  int cpu = cpuid();
+  pop_off();
+
+  acquire(&kmem[cpu].lock);
+  r->next = kmem[cpu].freelist;
+  kmem[cpu].freelist = r;
+  release(&kmem[cpu].lock);
+}
+
+void* steal_pages_from(int cpu)
+{
+  int count = 0;
+  struct run* start = kmem[cpu].freelist;
+  struct run* end = kmem[cpu].freelist;
+  while (end && count < 100) {
+    end = end->next;
+    count++;
+  }
+
+  if (end) {
+    kmem[cpu].freelist = end->next;
+    end->next = 0;
+  }
+  else {
+    kmem[cpu].freelist = 0;
+  }
+
+  push_off();
+  int my_cpu = cpuid();
+  pop_off();
+  kmem[my_cpu].freelist = start->next; 
+  return (void*)start;
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,11 +105,42 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  // acquire(&kmem.lock);
+  // r = kmem.freelist;
+  // if(r)
+  //   kmem.freelist = r->next;
+  // release(&kmem.lock);
+
+  // if(r)
+  //   memset((char*)r, 5, PGSIZE); // fill with junk
+  // return (void*)r;
+
+  // NEW EDITS
+
+  push_off();
+  int cpu = cpuid();
+  pop_off();
+
+  acquire(&kmem[cpu].lock);
+  r = kmem[cpu].freelist;
+  if(r) {
+    kmem[cpu].freelist = r->next;
+    release(&kmem[cpu].lock);
+  }
+  else {
+    int free_cpu_id;
+    for (free_cpu_id = 0; free_cpu_id < NCPU; free_cpu_id++) {
+      if (free_cpu_id == cpu) continue;
+      acquire(&kmem[free_cpu_id].lock);
+      if (kmem[free_cpu_id].freelist != 0) {
+        r = steal_pages_from(free_cpu_id);
+        release(&kmem[free_cpu_id].lock);
+        break;
+      }
+      release(&kmem[free_cpu_id].lock);
+    }
+    release(&kmem[cpu].lock);
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
